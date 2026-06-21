@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>P2P Chess</title>
     
-    <!-- Dependencies -->
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
     <link rel="stylesheet" href="https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.css">
@@ -33,11 +32,9 @@
             justify-content: center;
             min-height: 100vh;
             -webkit-font-smoothing: antialiased;
-            /* Prevent bounce scrolling on mobile */
             overscroll-behavior: none; 
         }
 
-        /* Toggled via JS when game starts to prevent scrolling while playing */
         body.game-active {
             overflow: hidden;
         }
@@ -84,6 +81,7 @@
             font-weight: 600;
             margin-bottom: 20px;
             color: #444;
+            transition: all 0.3s ease;
         }
 
         .btn {
@@ -113,9 +111,58 @@
             border-radius: 8px;
             overflow: hidden;
             border: 4px solid var(--border);
-            /* Prevents pull-to-refresh and screen panning when touching the board */
             touch-action: none; 
+            cursor: pointer;
         }
+
+        /* Tap to move styling */
+        .highlight {
+            background-color: rgba(255, 255, 51, 0.5) !important;
+        }
+
+        .highlight-legal {
+            position: relative;
+        }
+
+        .highlight-legal::after {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 25%;
+            height: 25%;
+            background-color: rgba(0, 0, 0, 0.25);
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+        }
+
+        /* Replay Controls */
+        .replay-controls {
+            display: none;
+            justify-content: center;
+            align-items: center;
+            gap: 15px;
+            margin-top: 20px;
+        }
+
+        .btn-icon {
+            background: #f0f0f0;
+            color: #1a1a1a;
+            border: none;
+            width: 50px;
+            height: 50px;
+            border-radius: 25px;
+            font-size: 20px;
+            cursor: pointer;
+            transition: background 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .btn-icon:hover { background: #e0e0e0; }
+        .btn-icon:disabled { opacity: 0.5; cursor: not-allowed; }
 
         .footer {
             margin-top: 30px;
@@ -128,86 +175,117 @@
 
     <div class="container">
         <div class="header-wrapper">
-            <!-- Vector Chess Knight Icon -->
             <svg class="icon" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
                 <path d="M19.998 19.996V22H3.998V19.996H19.998ZM11.996 2.001C13.239 1.999 15.65 2.502 17.5 4.35C18.631 5.48 19.167 6.945 19.261 8.528L19.268 8.784L18.847 9.07C16.92 10.372 15.541 12.33 14.887 14.629L14.778 15.061L15.358 15.15C16.353 15.3 17.16 15.823 17.65 16.598L17.818 16.89L17.914 17.218L18.15 18.521L18.232 18.823L17.913 18.824H6.082L5.764 18.823L5.845 18.521L6.16 16.784C6.39 15.518 7.28 14.502 8.483 14.073L8.85 13.952L8.723 13.585C8.016 11.533 7.844 9.176 8.547 7.027L8.681 6.643L8.318 6.467C7.625 6.13 6.91 5.923 6.11 5.864C6.015 5.856 5.972 5.736 6.046 5.674C7.545 4.417 9.539 3.425 11.666 3.064L11.996 2.001Z"/>
             </svg>
             <h1>P2P Chess</h1>
         </div>
         
-        <div class="status-badge" id="statusEl">Initializing network...</div>
-        
+        <div class="status-badge" id="statusEl">Initializing...</div>
         <button class="btn" id="shareBtn">🔗 Copy Invite Link</button>
 
-        <!-- The Chess Board -->
         <div id="board"></div>
+
+        <div class="replay-controls" id="replayControls">
+            <button class="btn-icon" id="prevBtn" onclick="stepReplay(-1)">◀</button>
+            <span id="replayStepText" style="font-weight: 600; font-size: 15px;">Final</span>
+            <button class="btn-icon" id="nextBtn" onclick="stepReplay(1)">▶</button>
+        </div>
     </div>
 
-    <div class="footer">Built with PeerJS, Chess.js & Chessboard.js</div>
+    <div class="footer">Permanent Games • Tap to Move</div>
 
     <script>
-        // --- 1. State & Assets Setup ---
+        // --- 1. Init & Permanent Game Routing ---
         const urlParams = new URLSearchParams(window.location.search);
-        const joinId = urlParams.get('join');
-        
-        let myColor = 'w';
+        let gameId = urlParams.get('game');
+
+        if (!gameId) {
+            gameId = 'chss_' + Math.random().toString(36).substr(2, 9);
+            localStorage.setItem(gameId + '_role', 'host');
+            window.location.href = '?game=' + gameId;
+        }
+
+        let myRole = localStorage.getItem(gameId + '_role');
+        if (!myRole) {
+            myRole = 'guest';
+            localStorage.setItem(gameId + '_role', 'guest');
+        }
+
+        let myColor = myRole === 'host' ? 'w' : 'b';
         let game = new Chess();
         let board = null;
-        let peer = new Peer(); 
+        let peer = null;
         let conn = null;
+
+        const savedPgn = localStorage.getItem(gameId + '_pgn');
+        if (savedPgn) game.load_pgn(savedPgn);
+
+        let selectedSquare = null;
+        let legalMoves = [];
+        let replayMoves = [];
+        let currentReplayStep = 0;
 
         const statusEl = document.getElementById('statusEl');
         const shareBtn = document.getElementById('shareBtn');
-
-        // Sounds
+        
         const moveSound = new Audio('https://images.chesscomfiles.com/chess-themes/sounds/_MP3_/default/move-self.mp3');
         const captureSound = new Audio('https://images.chesscomfiles.com/chess-themes/sounds/_MP3_/default/capture.mp3');
 
         function playSound(moveData) {
-            // Browsers require user interaction before playing audio, 
-            // the catch block prevents console errors if audio context isn't ready
-            if (moveData.captured) {
-                captureSound.play().catch(e => {});
-            } else {
-                moveSound.play().catch(e => {});
-            }
+            if (!moveData) return;
+            if (moveData.captured) captureSound.play().catch(()=>{});
+            else moveSound.play().catch(()=>{});
+        }
+
+        function saveState() {
+            localStorage.setItem(gameId + '_pgn', game.pgn());
         }
 
         // --- 2. Network Logic ---
-        peer.on('open', (id) => {
-            if (joinId) {
-                // We are Player 2 (Black)
-                myColor = 'b';
-                statusEl.innerText = "🟡 Connecting to host...";
-                conn = peer.connect(joinId);
-                setupConnectionHandlers();
-            } else {
-                // We are Player 1 (White)
-                statusEl.innerText = "⏳ Waiting for opponent...";
+        if (myRole === 'host') {
+            peer = new Peer(gameId);
+            
+            peer.on('open', () => {
                 shareBtn.style.display = 'inline-block';
-                
-                const inviteUrl = window.location.href.split('?')[0] + '?join=' + id;
+                statusEl.innerText = savedPgn ? "⏳ Waiting for opponent to return..." : "⏳ Waiting for opponent...";
                 
                 shareBtn.onclick = () => {
-                    navigator.clipboard.writeText(inviteUrl);
+                    navigator.clipboard.writeText(window.location.href);
                     shareBtn.innerText = "✅ Copied to Clipboard!";
                     setTimeout(() => { shareBtn.innerText = "🔗 Copy Invite Link"; }, 2000);
                 };
+            });
 
-                peer.on('connection', (connection) => {
-                    conn = connection;
-                    setupConnectionHandlers();
+            peer.on('connection', (connection) => {
+                conn = connection;
+                setupConnectionHandlers();
+                conn.on('open', () => {
+                    conn.send({ type: 'sync', pgn: game.pgn() });
                 });
-            }
-        });
+            });
+        } else {
+            peer = new Peer();
+            peer.on('open', () => { connectToHost(); });
+            peer.on('error', (err) => {
+                if (err.type === 'peer-unavailable') {
+                    statusEl.innerText = "⏳ Host is offline. Retrying...";
+                    setTimeout(connectToHost, 3000);
+                }
+            });
+        }
+
+        function connectToHost() {
+            statusEl.innerText = "🟡 Connecting to host...";
+            conn = peer.connect(gameId, { reliable: true });
+            setupConnectionHandlers();
+        }
 
         function setupConnectionHandlers() {
             conn.on('open', () => {
                 shareBtn.style.display = 'none';
-                initBoard();
-                
-                // Lock page scrolling to prevent dragging the screen instead of pieces
                 document.body.classList.add('game-active');
+                updateGameStatus();
             });
 
             conn.on('data', (data) => {
@@ -215,77 +293,156 @@
                     const moveResult = game.move(data.move);
                     board.position(game.fen());
                     playSound(moveResult);
+                    saveState();
+                    updateGameStatus();
+                } else if (data.type === 'sync') {
+                    game.load_pgn(data.pgn);
+                    board.position(game.fen());
+                    saveState();
                     updateGameStatus();
                 }
             });
 
             conn.on('close', () => {
-                statusEl.innerText = "❌ Opponent disconnected.";
+                statusEl.innerText = "❌ Opponent offline. Waiting...";
                 document.body.classList.remove('game-active');
+                if (myRole === 'guest') setTimeout(connectToHost, 3000);
             });
         }
 
         // --- 3. Chess Logic & UI ---
         function initBoard() {
             const config = {
-                draggable: true,
-                position: 'start',
+                draggable: false, 
+                position: game.fen(),
                 orientation: myColor === 'w' ? 'white' : 'black',
-                // Explicitly pull standard piece images from absolute CDN to fix mobile broken paths
-                pieceTheme: 'https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png',
-                onDragStart: onDragStart,
-                onDrop: onDrop,
-                onSnapEnd: onSnapEnd
+                pieceTheme: 'https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png'
             };
             board = Chessboard('board', config);
-            updateGameStatus();
-        }
-
-        function onDragStart(source, piece, position, orientation) {
-            if (game.game_over()) return false;
             
-            if ((myColor === 'w' && piece.search(/^b/) !== -1) ||
-                (myColor === 'b' && piece.search(/^w/) !== -1)) {
-                return false;
+            // If the game is already over on load, trigger the end UI immediately
+            if (game.game_over()) {
+                updateGameStatus();
             }
+
+            $('#board').on('click', '.square-55d63', handleSquareClick);
+        }
+
+        function removeHighlights() {
+            $('#board .square-55d63').removeClass('highlight highlight-legal');
+        }
+
+        function handleSquareClick() {
+            if (game.game_over()) return;
             
-            if (game.turn() !== myColor) return false;
-        }
+            if (game.turn() !== myColor) return;
+            
+            // Require active connection to make a move
+            if (!conn || !conn.open) {
+                alert("Please wait for your opponent to connect.");
+                return;
+            }
 
-        function onDrop(source, target) {
-            const move = game.move({
-                from: source,
-                to: target,
-                promotion: 'q' // Simplification: auto-promote to Queen
-            });
+            let square = $(this).attr('data-square');
 
-            if (move === null) return 'snapback';
+            if (selectedSquare) {
+                let move = legalMoves.find(m => m.to === square);
+                
+                if (move) {
+                    let moveResult = game.move({
+                        from: selectedSquare,
+                        to: square,
+                        promotion: 'q'
+                    });
+                    
+                    playSound(moveResult);
+                    board.position(game.fen());
+                    conn.send({ type: 'move', move: moveResult });
+                    saveState();
+                    updateGameStatus();
+                    
+                    selectedSquare = null;
+                    legalMoves = [];
+                    removeHighlights();
+                    return;
+                }
+            }
 
-            playSound(move);
-            conn.send({ type: 'move', move: move });
-            updateGameStatus();
-        }
-
-        function onSnapEnd() {
-            board.position(game.fen());
+            let piece = game.get(square);
+            if (piece && piece.color === myColor) {
+                selectedSquare = square;
+                legalMoves = game.moves({ square: square, verbose: true });
+                
+                removeHighlights();
+                $(this).addClass('highlight');
+                legalMoves.forEach(m => {
+                    $('.square-' + m.to).addClass('highlight-legal');
+                });
+            } else {
+                selectedSquare = null;
+                legalMoves = [];
+                removeHighlights();
+            }
         }
 
         function updateGameStatus() {
+            // Do not overwrite network connecting/waiting messages unless the game is over
+            if (!conn || !conn.open) {
+                if (!game.game_over()) return;
+            }
+
             let status = '';
             let moveColor = game.turn() === 'w' ? 'White' : 'Black';
 
             if (game.in_checkmate()) {
                 status = `🏆 Game Over! ${moveColor} is in checkmate.`;
-            } else if (game.in_draw()) {
+                initReplay();
+            } else if (game.in_draw() || game.in_stalemate() || game.in_threefold_repetition()) {
                 status = '🤝 Game Drawn';
+                initReplay();
             } else {
                 status = `🟢 ${moveColor}'s Turn`;
-                if (game.in_check()) {
-                    status += ` (Check!)`;
-                }
+                if (game.in_check()) status += ` (Check!)`;
             }
             statusEl.innerText = status;
         }
+
+        // --- 4. Immortal Replay Logic ---
+        function initReplay() {
+            document.getElementById('replayControls').style.display = 'flex';
+            document.getElementById('shareBtn').style.display = 'none';
+            
+            replayMoves = game.history();
+            currentReplayStep = replayMoves.length;
+            updateReplayUI();
+        }
+
+        window.stepReplay = function(direction) {
+            currentReplayStep += direction;
+            if (currentReplayStep < 0) currentReplayStep = 0;
+            if (currentReplayStep > replayMoves.length) currentReplayStep = replayMoves.length;
+            
+            let tempGame = new Chess();
+            for (let i = 0; i < currentReplayStep; i++) {
+                tempGame.move(replayMoves[i]);
+            }
+            
+            board.position(tempGame.fen());
+            updateReplayUI();
+        };
+
+        function updateReplayUI() {
+            document.getElementById('prevBtn').disabled = (currentReplayStep === 0);
+            document.getElementById('nextBtn').disabled = (currentReplayStep === replayMoves.length);
+            
+            let txt = currentReplayStep === replayMoves.length ? "Final" : `Move ${currentReplayStep}`;
+            document.getElementById('replayStepText').innerText = txt;
+        }
+
+        // Boot the board immediately on load for BOTH players
+        initBoard();
+
     </script>
 </body>
 </html>
+ 
