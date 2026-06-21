@@ -2,8 +2,8 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>P2P Chess ♟️</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>P2P Chess</title>
     
     <!-- Dependencies -->
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
@@ -12,7 +12,6 @@
     <script src="https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.js"></script>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
 
-    <!-- Levelsio Style CSS -->
     <style>
         :root {
             --bg: #fdfdfd;
@@ -34,6 +33,13 @@
             justify-content: center;
             min-height: 100vh;
             -webkit-font-smoothing: antialiased;
+            /* Prevent bounce scrolling on mobile */
+            overscroll-behavior: none; 
+        }
+
+        /* Toggled via JS when game starts to prevent scrolling while playing */
+        body.game-active {
+            overflow: hidden;
         }
 
         .container {
@@ -48,17 +54,25 @@
             text-align: center;
         }
 
+        .header-wrapper {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
         h1 {
             font-size: 28px;
             font-weight: 800;
-            margin: 0 0 5px 0;
+            margin: 0;
             letter-spacing: -0.5px;
         }
 
-        .subtitle {
-            color: #666;
-            margin: 0 0 25px 0;
-            font-size: 15px;
+        .icon {
+            width: 28px;
+            height: 28px;
+            fill: var(--text);
         }
 
         .status-badge {
@@ -83,7 +97,7 @@
             cursor: pointer;
             transition: all 0.2s ease;
             box-shadow: 0 4px 14px 0 rgba(255, 71, 66, 0.39);
-            display: none; /* Hidden by default */
+            display: none;
             margin: 0 auto 20px auto;
         }
 
@@ -99,6 +113,8 @@
             border-radius: 8px;
             overflow: hidden;
             border: 4px solid var(--border);
+            /* Prevents pull-to-refresh and screen panning when touching the board */
+            touch-action: none; 
         }
 
         .footer {
@@ -111,8 +127,13 @@
 <body>
 
     <div class="container">
-        <h1>P2P Chess ♟️</h1>
-        <p class="subtitle">No servers. Just WebRTC.</p>
+        <div class="header-wrapper">
+            <!-- Vector Chess Knight Icon -->
+            <svg class="icon" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path d="M19.998 19.996V22H3.998V19.996H19.998ZM11.996 2.001C13.239 1.999 15.65 2.502 17.5 4.35C18.631 5.48 19.167 6.945 19.261 8.528L19.268 8.784L18.847 9.07C16.92 10.372 15.541 12.33 14.887 14.629L14.778 15.061L15.358 15.15C16.353 15.3 17.16 15.823 17.65 16.598L17.818 16.89L17.914 17.218L18.15 18.521L18.232 18.823L17.913 18.824H6.082L5.764 18.823L5.845 18.521L6.16 16.784C6.39 15.518 7.28 14.502 8.483 14.073L8.85 13.952L8.723 13.585C8.016 11.533 7.844 9.176 8.547 7.027L8.681 6.643L8.318 6.467C7.625 6.13 6.91 5.923 6.11 5.864C6.015 5.856 5.972 5.736 6.046 5.674C7.545 4.417 9.539 3.425 11.666 3.064L11.996 2.001Z"/>
+            </svg>
+            <h1>P2P Chess</h1>
+        </div>
         
         <div class="status-badge" id="statusEl">Initializing network...</div>
         
@@ -125,29 +146,43 @@
     <div class="footer">Built with PeerJS, Chess.js & Chessboard.js</div>
 
     <script>
-        // --- 1. State Setup ---
+        // --- 1. State & Assets Setup ---
         const urlParams = new URLSearchParams(window.location.search);
         const joinId = urlParams.get('join');
         
         let myColor = 'w';
         let game = new Chess();
         let board = null;
-        let peer = new Peer(); // Auto-generates a unique ID
+        let peer = new Peer(); 
         let conn = null;
 
         const statusEl = document.getElementById('statusEl');
         const shareBtn = document.getElementById('shareBtn');
 
-        // --- 2. Network Logic (PeerJS) ---
+        // Sounds
+        const moveSound = new Audio('https://images.chesscomfiles.com/chess-themes/sounds/_MP3_/default/move-self.mp3');
+        const captureSound = new Audio('https://images.chesscomfiles.com/chess-themes/sounds/_MP3_/default/capture.mp3');
+
+        function playSound(moveData) {
+            // Browsers require user interaction before playing audio, 
+            // the catch block prevents console errors if audio context isn't ready
+            if (moveData.captured) {
+                captureSound.play().catch(e => {});
+            } else {
+                moveSound.play().catch(e => {});
+            }
+        }
+
+        // --- 2. Network Logic ---
         peer.on('open', (id) => {
             if (joinId) {
-                // We are Player 2 (Black) joining a host
+                // We are Player 2 (Black)
                 myColor = 'b';
                 statusEl.innerText = "🟡 Connecting to host...";
                 conn = peer.connect(joinId);
                 setupConnectionHandlers();
             } else {
-                // We are Player 1 (White) hosting the game
+                // We are Player 1 (White)
                 statusEl.innerText = "⏳ Waiting for opponent...";
                 shareBtn.style.display = 'inline-block';
                 
@@ -159,7 +194,6 @@
                     setTimeout(() => { shareBtn.innerText = "🔗 Copy Invite Link"; }, 2000);
                 };
 
-                // Wait for Player 2 to connect
                 peer.on('connection', (connection) => {
                     conn = connection;
                     setupConnectionHandlers();
@@ -171,18 +205,23 @@
             conn.on('open', () => {
                 shareBtn.style.display = 'none';
                 initBoard();
+                
+                // Lock page scrolling to prevent dragging the screen instead of pieces
+                document.body.classList.add('game-active');
             });
 
             conn.on('data', (data) => {
                 if (data.type === 'move') {
-                    game.move(data.move);
+                    const moveResult = game.move(data.move);
                     board.position(game.fen());
+                    playSound(moveResult);
                     updateGameStatus();
                 }
             });
 
             conn.on('close', () => {
                 statusEl.innerText = "❌ Opponent disconnected.";
+                document.body.classList.remove('game-active');
             });
         }
 
@@ -192,6 +231,8 @@
                 draggable: true,
                 position: 'start',
                 orientation: myColor === 'w' ? 'white' : 'black',
+                // Explicitly pull standard piece images from absolute CDN to fix mobile broken paths
+                pieceTheme: 'https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png',
                 onDragStart: onDragStart,
                 onDrop: onDrop,
                 onSnapEnd: onSnapEnd
@@ -201,37 +242,31 @@
         }
 
         function onDragStart(source, piece, position, orientation) {
-            // Prevent dragging if game is over
             if (game.game_over()) return false;
             
-            // Prevent dragging opponent's pieces
             if ((myColor === 'w' && piece.search(/^b/) !== -1) ||
                 (myColor === 'b' && piece.search(/^w/) !== -1)) {
                 return false;
             }
             
-            // Prevent dragging if it's not your turn
             if (game.turn() !== myColor) return false;
         }
 
         function onDrop(source, target) {
-            // Validate move logic
             const move = game.move({
                 from: source,
                 to: target,
                 promotion: 'q' // Simplification: auto-promote to Queen
             });
 
-            // If illegal move, snap piece back
             if (move === null) return 'snapback';
 
-            // Send valid move to opponent
+            playSound(move);
             conn.send({ type: 'move', move: move });
             updateGameStatus();
         }
 
         function onSnapEnd() {
-            // Update board position after castling, en passant, promotion
             board.position(game.fen());
         }
 
@@ -252,8 +287,5 @@
             statusEl.innerText = status;
         }
     </script>
-  <script>
-    if ("serviceWorker" in navigator) { navigator.serviceWorker.register("sw.js"); }
-  </script>
 </body>
 </html>
